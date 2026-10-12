@@ -1,4 +1,5 @@
 load("//buck2:haskell.bzl", "haskell_library")
+load("//cabal-buck2:packages.bzl", "PACKAGES")
 
 # A rule for running the (buck2-built) Thrift compiler over a .thrift file.
 #
@@ -125,6 +126,11 @@ thrift_srcs_export = rule(
     },
 )
 
+# The thrift-compiler package's executable, wherever the project has it (see
+# cabal-buck2/packages.bzl): hsthrift's own compiler, which is "compiler" when
+# hsthrift is built on its own and "hsthrift/compiler" within another project.
+_THRIFT_COMPILER = "//" + PACKAGES["thrift-compiler"] + ":thrift-compiler"
+
 def _thrift_compile_impl(ctx: AnalysisContext) -> list[Provider]:
     out = ctx.actions.declare_output(ctx.attrs.out, dir = True)
 
@@ -174,7 +180,7 @@ def _thrift_compile_impl(ctx: AnalysisContext) -> list[Provider]:
 thrift_compile = rule(
     impl = _thrift_compile_impl,
     attrs = {
-        "compiler": attrs.exec_dep(providers = [RunInfo], default = "@hsthrift//compiler:thrift-compiler"),
+        "compiler": attrs.exec_dep(providers = [RunInfo], default = _THRIFT_COMPILER),
         "deps": attrs.list(attrs.dep(providers = [ThriftSrcsInfo]), default = []),
         "flags": attrs.list(attrs.string(), default = []),
         "out": attrs.string(default = "gen"),
@@ -212,9 +218,15 @@ def _thrift_name(thrift_file, full_paths = False):
     # `include` each other by the *full* repo-root-relative path instead
     # (e.g. "glean/config/service.thrift"). full_paths picks which one a
     # given thrift_srcs()/thrift_library() caller's files use - it can't
-    # be auto-detected, since both are just plain strings.
+    # be auto-detected, since both are just plain strings. `True` means
+    # that path is this package's own directory in the project; that's
+    # only right when the project is where the .thrift files' includes
+    # start from, so a project that is a subdirectory of another one (hsthrift
+    # within Glean) gives the package's directory as the includes name it
+    # instead, e.g. full_paths = "thrift/annotation".
     if full_paths:
-        return native.package_name() + "/" + thrift_file
+        prefix = native.package_name() if full_paths == True else full_paths
+        return prefix + "/" + thrift_file
     return thrift_file
 
 def _module_name(path):

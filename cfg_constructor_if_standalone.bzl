@@ -29,11 +29,11 @@ load(
 load("@prelude//cfg/modifier/common.bzl", "MODIFIER_METADATA_KEY")
 
 def cfg_constructor_if_standalone():
-    # get_cell_name() gives the name of *this* PACKAGE file's own cell
-    # - "root" when this checkout's own .buckconfig is the outermost
-    # one (genuinely standalone), or the name of the cell when nested
-    # inside another project's cell graph.
-    if get_cell_name() != "root":
+    # get_base_path() gives the directory of *this* PACKAGE file, relative
+    # to the root - "" when this is the project's own root PACKAGE file
+    # (genuinely standalone), or e.g. "hsthrift" when this checkout is a
+    # subdirectory of another project.
+    if get_base_path() != "":
         return
 
     set_cfg_constructor(
@@ -59,6 +59,6 @@ def cfg_constructor_if_standalone():
 # restriction (it's package-scoped, not project-wide) - unlike
 # set_cfg_constructor(), calling it with `[]` when nested is harmless.
 def dev_modifiers_if_standalone():
-    if get_cell_name() != "root":
+    if get_base_path() != "":
         return []
     return ["root//buck2/constraints:dev", "root//buck2/constraints:clang"]

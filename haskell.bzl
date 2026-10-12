@@ -15,8 +15,7 @@
 #   - support for build rules generated from Cabal packages:
 #     - `cabal_component = (pkg, component)` causes this component's
 #       `cabal_macros.h` file to be included when `{-# LANGUAGE CPP #-}`
-#       is on. `pkg` is the package's buck2 package as `cell//dir`, e.g.
-#       `root//` or `root//glean/lsp`.
+#       is on.
 
 load("//buck2:alex_happy.bzl", "alex", "happy")
 load("//buck2:hsc2hs.bzl", "hsc2hs")
@@ -33,8 +32,8 @@ def _cabal_macros_include_flags(cabal_component):
     if cabal_component == None:
         return []
     pkg, component = cabal_component
-    autogen_dir = pkg + "cabal-buck2/autogen" if pkg.endswith("/") else pkg + "/cabal-buck2/autogen"
-    label = autogen_dir + ":" + component + "-cabal-macros"
+    autogen_dir = "cabal-buck2/autogen" if pkg == "." else pkg + "/cabal-buck2/autogen"
+    label = "//" + autogen_dir + ":" + component + "-cabal-macros"
     return ["-optP-include", "-optP$(location " + label + ")"]
 
 def _cabal_macros_hsc_flags(cabal_component):

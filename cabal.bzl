@@ -46,25 +46,19 @@
 #
 # The spec says nothing about where packages are: that is in PACKAGES, which
 # `cabal buck2` writes for the whole project into cabal-buck2/packages.bzl at
-# the root of the outermost project (the cell called "root"), and which has an
-# entry for each package that the project builds. A dependency on one of those
-# is a dependency on a target of this project, anything else is a prebuilt
-# package from @third-party-haskell. So a package's spec is the same wherever
-# in the project the package is, and in whichever project: moving a package
-# only changes packages.bzl. PACKAGES maps a package's name to
-#
-#   {"label": str,   # the package's buck2 package, "cell//dir": "root//" for the root
-#    "path": str}    # its directory from the root of the project, "." for the root
-#
-# - "path" is for what isn't a target but a path that the compilers get, which
-# run in the root of the project. They are different when the package is in a
-# cell other than "root".
+# the project root, and which maps the name of each package that the project
+# builds to its directory (relative to the root, "." for the root itself). A
+# dependency on one of those is a dependency on a target of this project,
+# anything else is a prebuilt package from @third-party-haskell. So a
+# package's spec is the same wherever in the project the package is, and in
+# whichever project: moving a package only changes packages.bzl. (All of the
+# packages are in the root cell.)
 
 load("//buck2:cmm.bzl", "cmm_library")
 load("//buck2:cxx.bzl", "cxx_library")
 load("//buck2:haskell.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//buck2:version.bzl", "CABAL_BUCK2_VERSION")
-load("@root//cabal-buck2:packages.bzl", "PACKAGES")
+load("//cabal-buck2:packages.bzl", "PACKAGES")
 load("@prelude//third-party:pkgconfig.bzl", "external_pkgconfig_library")
 
 _DEFAULT_RULES = {
@@ -83,46 +77,37 @@ def _nub(xs):
             out.append(x)
     return out
 
-def _label(package_label, name):
-    # `package_label` is a buck2 package as "cell//dir".
-    return package_label + ":" + name
+def _label(dir, name):
+    return "//" + ("" if dir == "." else dir) + ":" + name
 
-def _subdir(package_label, subdir):
-    # "root//" + "x" is "root//x", "root//a" + "x" is "root//a/x".
-    return package_label + subdir if package_label.endswith("/") else package_label + "/" + subdir
-
-def _local_package(name):
-    # The entry of a package built by this project, or None.
-    return PACKAGES.get(name)
-
-def _this_package(spec):
-    # Where the package being generated is. The BUCK file calling
-    # cabal_targets() has to be in that directory: if it isn't, packages.bzl
-    # is out of date (or this BUCK file was copied from elsewhere).
+def _this_dir(spec):
+    # The directory of the package being generated. The BUCK file calling
+    # cabal_targets() has to be in it: if it isn't, packages.bzl is out of
+    # date (or this BUCK file was copied from elsewhere).
     name = spec["package"]["name"]
-    pkg = _local_package(name)
-    if pkg == None:
+    dir = PACKAGES.get(name)
+    if dir == None:
         fail("package {} isn't in cabal-buck2/packages.bzl (at the root of the project): re-run `cabal buck2`".format(name))
     here = native.package_name()
-    expected = pkg["label"].split("//", 1)[1]
-    if here != expected:
-        fail("package {} is in {} according to cabal-buck2/packages.bzl, but its BUCK file is in {}: re-run `cabal buck2`".format(name, pkg["label"], here))
-    return pkg
+    if here != ("" if dir == "." else dir):
+        fail("package {} is in {} according to cabal-buck2/packages.bzl, but its BUCK file is in {}: re-run `cabal buck2`".format(name, dir, here or "."))
+    return dir
 
 def _third_party_label(name):
     return "third-party-haskell//:" + name
 
-def _src(pkg, src):
+def _src(pkg_dir, src):
     if type(src) == type({}):
-        return _label(_subdir(pkg["label"], "cabal-buck2/autogen"), src["autogen"])
+        autogen_dir = "cabal-buck2/autogen" if pkg_dir == "." else pkg_dir + "/cabal-buck2/autogen"
+        return _label(autogen_dir, src["autogen"])
     return src
 
-def _srcs(c, pkg):
+def _srcs(c, pkg_dir):
     srcs = {}
     if "main_is" in c:
-        srcs["Main"] = _src(pkg, c["main_is"])
+        srcs["Main"] = _src(pkg_dir, c["main_is"])
     for module, src in c.get("srcs", {}).items():
-        srcs[module] = _src(pkg, src)
+        srcs[module] = _src(pkg_dir, src)
     return srcs
 
 def _include_flags(c, pkg_dir):
@@ -157,9 +142,8 @@ def _linker_flags(c, project_ghc_options):
 def _dep_label(d):
     # A dependency's target: a library of this project, or an external
     # package's main library or sub-library.
-    local = _local_package(d["package"])
-    if local != None:
-        return _label(local["label"], d.get("library", d["package"]))
+    if d["package"] in PACKAGES:
+        return _label(PACKAGES[d["package"]], d.get("library", d["package"]))
     if "library" in d:
         # Libraries of different packages have the same names.
         return _third_party_label(d["package"] + "--" + d["library"])
@@ -173,7 +157,7 @@ def _classify_deps(deps):
     local = []
     external_sublibs = []
     for d in deps:
-        if _local_package(d["package"]) != None:
+        if d["package"] in PACKAGES:
             local.append(_dep_label(d))
         elif "library" in d:
             external_sublibs.append(_dep_label(d))
@@ -187,7 +171,7 @@ def _build_tool_depends(build_tools):
     labels = []
     for t in build_tools:
         if "package" in t:
-            labels.append(_label(_local_package(t["package"])["label"], t["exe"]))
+            labels.append(_label(PACKAGES[t["package"]], t["exe"]))
         else:
             labels.append(_third_party_label(t["exe"] + "-exe"))
     return _nub(labels)
@@ -243,7 +227,7 @@ def _cmm_library(c, spec):
     # GHC compiles Cmm, given the component's options as for Haskell.
     if not c.get("cmm_sources"):
         return []
-    pkg_dir = _this_package(spec)["path"]
+    pkg_dir = _this_dir(spec)
     name = c["name"] + "-cmm"
     cmm_library(
         name = name,
@@ -254,16 +238,15 @@ def _cmm_library(c, spec):
     return [":" + name]
 
 def _haskell_kwargs(c, spec, cxx_deps):
-    pkg = _this_package(spec)
-    pkg_dir = pkg["path"]
+    pkg_dir = _this_dir(spec)
     project_ghc_options = list(spec.get("ghc_options", []))
     kind = c["kind"]
     packages, deps = _classify_deps(c.get("deps", []))
     deps = _nub(deps + cxx_deps)
     kwargs = {
         "name": c["name"],
-        "srcs": _srcs(c, pkg),
-        "cabal_component": (pkg["label"], c["name"]),
+        "srcs": _srcs(c, pkg_dir),
+        "cabal_component": (pkg_dir, c["name"]),
     }
     if "exe_name" in c:
         kwargs["exe_name"] = c["exe_name"]
@@ -348,7 +331,7 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
             "Re-run `cabal buck2` with cabal-buck2 {}, or switch buck2/ to the {} branch of".format(CABAL_BUCK2_VERSION, generated_by or "0.1.0.0"),
             "https://github.com/simonmar/haskell-buck2.",
         ]))
-    pkg_dir = _this_package(spec)["path"]
+    pkg_dir = _this_dir(spec)
     pkgconfig_seen = {}
     for c in spec["components"]:
         kind = c["kind"]
