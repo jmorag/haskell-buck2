@@ -58,7 +58,7 @@ def _compiler_flags_arg():
 def _build_tool_depends_arg():
     return {
         "build_tool_depends": attrs.list(
-            attrs.dep(),
+            attrs.exec_dep(),
             default = [],
             doc = """
     Executables (haskell_binary(), export_exe(), or anything else with a
