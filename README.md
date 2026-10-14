@@ -27,27 +27,11 @@ There are other build options that can be selected in a similar way, such as `-m
 
 # Testing this repo
 
-`example/` is a small, self-contained Cabal package used to test-drive
-this repo's own Buck2 support: a library with a Template Haskell
-splice, an `.hsc` file (hsc2hs), C++ code linked in via FFI
-(`cxx-sources`), and a dependency on a real Hackage package (`safe`, to
-exercise `gen-haskell-prebuilt.py`'s cabal-store support, as opposed to
-GHC's own bundled packages) - plus a `cabal test` test-suite exercising
-all of it.
+This repository has no tests or CI of its own: it is the Buck2 support code for
+[cabal-buck2](https://github.com/simonmar/cabal-buck2), which includes it as a
+submodule (`buck2/`) and tests it, with an example project (`example/`:
+Template Haskell, hsc2hs, C++ via FFI and a Hackage dependency) and with its
+own build. Update the submodule there to test a change here.
 
-To try it locally:
-
-```
-example/setup.sh
-cd example
-buck2 build //...          # dev
-buck2 test //...
-buck2 build -m opt //...   # opt
-buck2 test -m opt //...
-buck2 build -m prof //...  # profiling
-buck2 test -m prof //...
-```
-
-`.github/workflows/ci.yml` runs the same steps (plus the plain `cabal
-build --only-dependencies` this all depends on) on every push and pull
-request, in `dev`, `opt` and `prof` mode.
+`template/` has the `.buckconfig` and `PACKAGE` that `cabal buck2` copies to a
+project that doesn't have them.

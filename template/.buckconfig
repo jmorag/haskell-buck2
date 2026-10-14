@@ -4,8 +4,6 @@
   toolchains = buck2/toolchains
   third-party-haskell = third-party/haskell
   none = none
-  # exclude this from buck2 build //...
-  example = buck2/example
 
 [cell_aliases]
   config = prelude
