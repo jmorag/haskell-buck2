@@ -19,7 +19,7 @@
 #         "kind": "library" | "executable" | "test-suite" | "benchmark",
 #         "name": str,                        # also the buck2 target name
 #         "exe_name": str,                    # executables only: the file name, if not the target name
-#         "srcs": {module: src},              # src: package-relative path | {"autogen": name}
+#         "srcs": {module: src},              # src: package-relative path | {"autogen": name} | {"provided": True}
 #         "main_is": src,                     # not for libraries; module "Main", or C/C++ (see _foreign_main)
 #         "ghc_options": [str], "cpp_options": [str],
 #         "language": str, "extensions": [str],
@@ -53,6 +53,12 @@
 # package's spec is the same wherever in the project the package is, and in
 # whichever project: moving a package only changes packages.bzl. (All of the
 # packages are in the root cell.)
+#
+# A project customises the generated targets of its packages in a
+# cabal-buck2.bzl at its root, rather than in each package's BUCK file (which
+# may not be the project's to change, in a git submodule say): its OVERRIDES
+# maps the name of a package to the overrides of its components, as
+# cabal_targets() takes them. packages.bzl passes it on.
 
 # This load has to come before the others: they load more from tools.bzl (the
 # fingerprints, the alex and happy targets...), which a tools.bzl written by
@@ -66,7 +72,7 @@ load("//buck2:cmm.bzl", "cmm_library")
 load("//buck2:cxx.bzl", "cxx_binary", "cxx_library")
 load("//buck2:headers.bzl", "headers_of")
 load("//buck2:haskell.bzl", "haskell_binary", "haskell_library", "haskell_test")
-load("//cabal-buck2:packages.bzl", "PACKAGES")
+load("//cabal-buck2:packages.bzl", "OVERRIDES", "PACKAGES")
 load("@prelude//paths.bzl", "paths")
 load("@prelude//third-party:pkgconfig.bzl", "external_pkgconfig_library")
 
@@ -118,13 +124,31 @@ def _src(pkg_dir, src):
         return _label(autogen_dir, src["autogen"])
     return src
 
+def _provided(src):
+    return type(src) == type({}) and src.get("provided", False)
+
 def _srcs(c, pkg_dir):
     srcs = {}
     if "main_is" in c:
         srcs["Main"] = _src(pkg_dir, c["main_is"])
     for module, src in c.get("srcs", {}).items():
-        srcs[module] = _src(pkg_dir, src)
+        if not _provided(src):
+            srcs[module] = _src(pkg_dir, src)
     return srcs
+
+def _check_provided(spec, c, srcs):
+    # A "provided" module is one that the package's Setup.hs would have
+    # generated (`cabal buck2 --enable-custom-setup` doesn't run it), whose
+    # source the project gives instead, in the component's overrides.
+    missing = [m for m, src in c.get("srcs", {}).items() if _provided(src) and m not in srcs]
+    if missing:
+        fail("{}: the Setup.hs of package {} would generate {}, but it isn't run (--enable-custom-setup): give their sources in the component's overrides, e.g. overrides = {{\"{}\": {{\"srcs\": {{\"{}\": ...}}}}}}".format(
+            c["name"],
+            spec["package"]["name"],
+            ", ".join(missing),
+            c["name"],
+            missing[0],
+        ))
 
 def _include_flags(c, pkg_dir):
     # The package's own include directories, and where a configure script put
@@ -381,7 +405,9 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
           ("library", "executable", "test-suite", "benchmark"), or "*" for all
           of them.
       overrides: extra attributes for individual components, keyed by
-          component name.
+          component name. The project's own overrides of the package's
+          components (OVERRIDES[package] in its cabal-buck2.bzl, if it has
+          one) come before these.
       transform: if given, called as transform(kind, component, attrs) with
           each target's final attributes (the Haskell rule's, not the C/C++
           helper's), and returns the attributes to use instead - or None to
@@ -393,7 +419,7 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
     to, dicts merged, anything else replaced. Later sources win: defaults for
     "*", then for the kind, then the component's override, then transform.
     An executable whose main-is is C/C++ is a cxx_binary() (see
-    _cxx_binary()), to which only its override applies: defaults, transform
+    _cxx_binary()), to which only its overrides apply: defaults, transform
     and rules are for the Haskell rules.
     """
     generated_by = spec.get("cabal_buck2")
@@ -405,21 +431,24 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
             "https://github.com/simonmar/haskell-buck2.",
         ]))
     pkg_dir = _this_dir(spec)
+    project_overrides = OVERRIDES.get(spec["package"]["name"], {})
     pkgconfig_seen = {}
     for c in spec["components"]:
         if _foreign_main(c):
-            _cxx_binary(c, pkg_dir, pkgconfig_seen, overrides.get(c["name"], {}))
+            _cxx_binary(c, pkg_dir, pkgconfig_seen, _merge(project_overrides.get(c["name"], {}), overrides.get(c["name"], {})))
             continue
         kind = c["kind"]
         cxx_deps = _cxx_library(c, pkg_dir, pkgconfig_seen) + _cmm_library(c, spec)
         kwargs = _haskell_kwargs(c, spec, cxx_deps)
         kwargs = _merge(kwargs, defaults.get("*", {}))
         kwargs = _merge(kwargs, defaults.get(kind, {}))
+        kwargs = _merge(kwargs, project_overrides.get(c["name"], {}))
         kwargs = _merge(kwargs, overrides.get(c["name"], {}))
         if transform:
             kwargs = transform(kind, c, kwargs)
             if kwargs == None:
                 continue
+        _check_provided(spec, c, kwargs.get("srcs", {}))
         rules.get(kind, _DEFAULT_RULES[kind])(**kwargs)
     _data_files(spec, pkg_dir)
 
