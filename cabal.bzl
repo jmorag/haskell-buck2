@@ -20,7 +20,7 @@
 #         "name": str,                        # also the buck2 target name
 #         "exe_name": str,                    # executables only: the file name, if not the target name
 #         "srcs": {module: src},              # src: package-relative path | {"autogen": name}
-#         "main_is": src,                     # not for libraries; becomes module "Main"
+#         "main_is": src,                     # not for libraries; module "Main", or C/C++ (see _foreign_main)
 #         "ghc_options": [str], "cpp_options": [str],
 #         "language": str, "extensions": [str],
 #         "extra_libraries": [str],
@@ -63,10 +63,11 @@
 load("@third-party-haskell//:tools.bzl", TOOLS_CABAL_BUCK2_VERSION = "CABAL_BUCK2_VERSION")
 load("//buck2:version.bzl", "CABAL_BUCK2_VERSION")
 load("//buck2:cmm.bzl", "cmm_library")
-load("//buck2:cxx.bzl", "cxx_library")
+load("//buck2:cxx.bzl", "cxx_binary", "cxx_library")
 load("//buck2:headers.bzl", "headers_of")
 load("//buck2:haskell.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//cabal-buck2:packages.bzl", "PACKAGES")
+load("@prelude//paths.bzl", "paths")
 load("@prelude//third-party:pkgconfig.bzl", "external_pkgconfig_library")
 
 if TOOLS_CABAL_BUCK2_VERSION != CABAL_BUCK2_VERSION:
@@ -191,29 +192,16 @@ def _build_tool_depends(build_tools):
             labels.append(_third_party_label(t["exe"] + "-exe"))
     return _nub(labels)
 
-def _cxx_library(c, pkg_dir, pkgconfig_seen):
-    # Returns the labels the Haskell rule must additionally depend on.
-    srcs = list(c.get("c_sources", [])) + list(c.get("cxx_sources", [])) + list(c.get("asm_sources", []))
-    if not srcs:
-        return []
+def _cxx_kwargs(c, pkgconfig_seen, srcs, cxx):
+    # The attributes of a C/C++ rule that compiles `srcs` with the
+    # component's options; `cxx` says whether there is C++ among them.
     pkgconfig = _nub(c.get("pkgconfig", []))
     for p in pkgconfig:
         if p not in pkgconfig_seen:
             pkgconfig_seen[p] = True
             external_pkgconfig_library(name = "pkgconfig-" + p, package = p, visibility = ["PUBLIC"])
 
-    # exported_preprocessor_flags is an opaque list of strings to buck2, so
-    # (unlike srcs) its include paths have to be made relative to the cell
-    # root by hand: cxx actions always run from there.
-    include_flags = _include_flags(c, pkg_dir)
-    name = c["name"] + "-cxx"
-    kwargs = {"name": name, "srcs": srcs, "visibility": ["PUBLIC"]}
-    if include_flags:
-        kwargs["exported_preprocessor_flags"] = include_flags
-
-    # GHC includes its version header (which defines __GLASGOW_HASKELL__)
-    # in the C it compiles; the rts package supplies the header.
-    kwargs["compiler_flags"] = ["-include", "ghcversion.h"]
+    kwargs = {"srcs": srcs, "visibility": ["PUBLIC"]}
 
     # cc-options are for C and assembler (which GHC also gets the C compiler
     # to preprocess), cxx-options for C++.
@@ -225,20 +213,85 @@ def _cxx_library(c, pkg_dir, pkgconfig_seen):
     }
     kwargs["lang_compiler_flags"] = {lang: flags for lang, flags in lang_flags.items() if flags}
 
-    # The headers that GHC adds when it compiles C itself, but buck2 doesn't:
-    # its own (HsFFI.h) and those of the packages the component depends on
-    # (HsUnixConfig.h, say).
+    kwargs["deps"] = [":pkgconfig-" + p for p in pkgconfig]
+
+    # cxx_library() and cxx_binary() add -std=c++20 to everything, which a
+    # C-only target can't have.
+    if not cxx:
+        kwargs["cxx_std"] = False
+    return kwargs
+
+def _cxx_library(c, pkg_dir, pkgconfig_seen):
+    # Returns the labels the Haskell rule must additionally depend on.
+    srcs = list(c.get("c_sources", [])) + list(c.get("cxx_sources", [])) + list(c.get("asm_sources", []))
+    if not srcs:
+        return []
+    kwargs = _cxx_kwargs(c, pkgconfig_seen, srcs, bool(c.get("cxx_sources")))
+    name = c["name"] + "-cxx"
+
+    # The C of a Haskell component is compiled as GHC would compile it,
+    # which includes its version header (defining __GLASGOW_HASKELL__) and
+    # makes available its own headers (HsFFI.h) and those of the packages
+    # the component depends on (HsUnixConfig.h, say).
+    kwargs["compiler_flags"] = ["-include", "ghcversion.h"]
     packages, _ = _classify_deps(c.get("deps", []))
     headers = name + "-headers"
     headers_of(name = headers, deps = _nub([_third_party_label(p) for p in ["rts"] + packages]))
-    kwargs["deps"] = [":" + headers] + [":pkgconfig-" + p for p in pkgconfig]
+    kwargs["deps"] = [":" + headers] + kwargs["deps"]
 
-    # cxx_library() adds -std=c++20 to everything, which a C-only target
-    # can't have.
-    if not c.get("cxx_sources"):
-        kwargs["cxx_std"] = False
-    cxx_library(**kwargs)
+    # exported_preprocessor_flags is an opaque list of strings to buck2, so
+    # (unlike srcs) its include paths have to be made relative to the cell
+    # root by hand: cxx actions always run from there.
+    include_flags = _include_flags(c, pkg_dir)
+    if include_flags:
+        kwargs["exported_preprocessor_flags"] = include_flags
+    cxx_library(name = name, **kwargs)
     return [":" + name]
+
+# The extensions by which Cabal recognises a C or C++ main-is.
+_FOREIGN_MAIN_EXTENSIONS = [".c", ".cpp", ".cxx", ".c++"]
+
+def _foreign_main(c):
+    main = c.get("main_is")
+    return type(main) == type("") and paths.split_extension(main)[1] in _FOREIGN_MAIN_EXTENSIONS
+
+def _cxx_binary(c, pkg_dir, pkgconfig_seen, overrides):
+    # A component whose main-is is C/C++ (as some of GHC's own tools are) is
+    # built as a plain C/C++ program. Cabal would compile it with GHC, which
+    # makes GHC's headers and those of the component's Haskell dependencies
+    # available, and link it with GHC, which links in the RTS. Neither is of
+    # any use to a program without Haskell code in it (which isn't supported
+    # here), so its dependencies on external Haskell packages (base, say)
+    # are ignored.
+    unsupported = []
+    if c["kind"] not in ("executable", "benchmark"):
+        unsupported.append("a " + c["kind"])
+    if c.get("srcs"):
+        unsupported.append("Haskell modules")
+    if c.get("cmm_sources"):
+        unsupported.append("Cmm sources")
+    _, local_deps = _classify_deps(c.get("deps", []))
+    if local_deps:
+        unsupported.append("dependencies on Haskell libraries")
+    if unsupported:
+        fail("{}: a C/C++ main-is ({}) is only supported in an executable without {}".format(
+            c["name"],
+            c["main_is"],
+            " or ".join(unsupported),
+        ))
+    srcs = [c["main_is"]] + list(c.get("c_sources", [])) + list(c.get("cxx_sources", [])) + list(c.get("asm_sources", []))
+    cxx = bool(c.get("cxx_sources")) or paths.split_extension(c["main_is"])[1] != ".c"
+    kwargs = _cxx_kwargs(c, pkgconfig_seen, srcs, cxx)
+    kwargs["name"] = c["name"]
+    if "exe_name" in c:
+        kwargs["executable_name"] = c["exe_name"]
+    include_flags = _include_flags(c, pkg_dir)
+    if include_flags:
+        kwargs["preprocessor_flags"] = include_flags
+    linker_flags = ["-l" + l for l in c.get("extra_libraries", [])]
+    if linker_flags:
+        kwargs["linker_flags"] = _nub(linker_flags)
+    cxx_binary(**_merge(kwargs, overrides))
 
 def _cmm_library(c, spec):
     # GHC compiles Cmm, given the component's options as for Haskell.
@@ -339,6 +392,9 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
     Extra attributes are merged into the generated ones: lists are appended
     to, dicts merged, anything else replaced. Later sources win: defaults for
     "*", then for the kind, then the component's override, then transform.
+    An executable whose main-is is C/C++ is a cxx_binary() (see
+    _cxx_binary()), to which only its override applies: defaults, transform
+    and rules are for the Haskell rules.
     """
     generated_by = spec.get("cabal_buck2")
     if generated_by != CABAL_BUCK2_VERSION:
@@ -351,6 +407,9 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
     pkg_dir = _this_dir(spec)
     pkgconfig_seen = {}
     for c in spec["components"]:
+        if _foreign_main(c):
+            _cxx_binary(c, pkg_dir, pkgconfig_seen, overrides.get(c["name"], {}))
+            continue
         kind = c["kind"]
         cxx_deps = _cxx_library(c, pkg_dir, pkgconfig_seen) + _cmm_library(c, spec)
         kwargs = _haskell_kwargs(c, spec, cxx_deps)
