@@ -25,6 +25,7 @@ HaskellToolchainInfo = provider(
         "linker": provider_field(typing.Any, default = None),
         "linker_flags": provider_field(typing.Any, default = None),
         "haddock": provider_field(typing.Any, default = None),
+        "hsc2hs": provider_field(typing.Any, default = None),
         "compiler_major_version": provider_field(typing.Any, default = None),
         "package_name_prefix": provider_field(typing.Any, default = None),
         "packager": provider_field(typing.Any, default = None),

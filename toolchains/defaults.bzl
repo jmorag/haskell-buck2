@@ -5,6 +5,9 @@ load(":haskell.bzl", "haskell_toolchain")
 CABAL_GHC = "ghc-" + GHC_VERSION
 CABAL_GHC_PKG = "ghc-pkg-" + GHC_VERSION
 
+# hsc2hs ships with GHC (as hsc2hs-<version>, e.g. hsc2hs-9.4.8).
+CABAL_HSC2HS = "hsc2hs-" + GHC_VERSION
+
 # The Haskell toolchain for a project set up by `cabal buck2`. A project can
 # define its own toolchains cell and call this, overriding any attribute of
 # haskell_toolchain(), e.g. to use a compiler that it builds itself.
@@ -26,6 +29,7 @@ def default_haskell_toolchain(name, **kwargs):
     kwargs.setdefault("compiler", CABAL_GHC)
     kwargs.setdefault("packager", CABAL_GHC_PKG)
     kwargs.setdefault("haddock", "haddock")
+    kwargs.setdefault("hsc2hs", CABAL_HSC2HS)
     kwargs.setdefault("compiler_flags", [])
     kwargs.setdefault("linker_flags", [])
     # GHC_DYNAMIC comes from buck2/gen-haskell-prebuilt.py's own probe

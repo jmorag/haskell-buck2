@@ -18,16 +18,7 @@ def _hsc2hs_impl(ctx: AnalysisContext) -> list[Provider]:
     pp_infos = cxx_inherited_preprocessor_infos(ctx.attrs.deps)
     merged = cxx_merge_cpreprocessors(ctx.actions, [], pp_infos)
 
-    # hsc2hs ships with GHC itself (as hsc2hs-<version>, e.g. hsc2hs-9.4.8),
-    # not as a separately built/versioned tool, so there's no dedicated
-    # toolchain field for it (unlike ALEX/HAPPY in third-party/haskell/
-    # tools.bzl, which really are separate Cabal packages) - derive the
-    # version from the haskell toolchain's own compiler name instead
-    # (buck2/toolchains/BUCK sets compiler = "ghc-" + GHC_VERSION, read
-    # from Cabal's own resolved plan - see buck2/gen-haskell-prebuilt.py).
-    ghc_compiler = ctx.attrs._haskell_toolchain[HaskellToolchainInfo].compiler
-    ghc_version = ghc_compiler[len("ghc-"):] if ghc_compiler.startswith("ghc-") else ghc_compiler
-    hsc2hs_tool = "hsc2hs-" + ghc_version
+    hsc2hs_tool = ctx.attrs._haskell_toolchain[HaskellToolchainInfo].hsc2hs
 
     # C++, unless told otherwise: some of the .hsc files need the headers of
     # C++ code. A package that is only C (Cabal's way) must not be compiled as
