@@ -14,12 +14,14 @@
 #     "package": {"name": str, "version": str},   # where it lives: see PACKAGES, below
 #     "ghc_options": [str],                   # supplied by the project, not the .cabal file
 #     "data": {"dir": str, "files": [str]},   # the package's data-dir and data-files (patterns)
+#     "extra_source_files": [str],            # the package's extra-source-files (patterns)
 #     "components": [
 #       {
 #         "kind": "library" | "executable" | "test-suite" | "benchmark",
 #         "name": str,                        # also the buck2 target name
 #         "exe_name": str,                    # executables only: the file name, if not the target name
 #         "srcs": {module: src},              # src: package-relative path | {"autogen": name} | {"provided": True}
+#         "boot_srcs": {module: str},         # the .hs-boot file of each module that has one (package-relative)
 #         "main_is": src,                     # not for libraries; module "Main", or C/C++ (see _foreign_main)
 #         "ghc_options": [str], "cpp_options": [str],
 #         "language": str, "extensions": [str],
@@ -340,6 +342,7 @@ def _haskell_kwargs(c, spec, cxx_deps):
     kwargs = {
         "name": c["name"],
         "srcs": _srcs(c, pkg_dir),
+        "boot_srcs": dict(c.get("boot_srcs", {})),
         "cabal_component": (pkg_dir, c["name"]),
     }
     if "exe_name" in c:
@@ -451,6 +454,7 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
         _check_provided(spec, c, kwargs.get("srcs", {}))
         rules.get(kind, _DEFAULT_RULES[kind])(**kwargs)
     _data_files(spec, pkg_dir)
+    _extra_source_files(spec)
 
 def _data_files(spec, pkg_dir):
     # The package's data-files, as a directory laid out like its data-dir:
@@ -464,5 +468,18 @@ def _data_files(spec, pkg_dir):
     native.filegroup(
         name = spec["package"]["name"] + "-data",
         srcs = {f[len(prefix):]: f for f in files},
+        visibility = ["PUBLIC"],
+    )
+
+def _extra_source_files(spec):
+    # The package's extra-source-files, as a directory laid out like the
+    # package, for whatever else in the project needs them: a generator of
+    # its sources, say.
+    patterns = spec.get("extra_source_files")
+    if not patterns:
+        return
+    native.filegroup(
+        name = spec["package"]["name"] + "-extra-source-files",
+        srcs = native.glob(patterns),
         visibility = ["PUBLIC"],
     )

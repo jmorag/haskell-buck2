@@ -12,6 +12,10 @@
 #     listed in `deps`, same as any other buck2 target.
 #   - alex/happy: any `.x`/`.y`/`.ly` file in `srcs` is automatically run through
 #     the corresponding tool (see buck2/alex_happy.bzl).
+#   - boot files: `boot_srcs = {module: file}` gives the .hs-boot file of each
+#     module (of `srcs`, by module name) that has one. That of a generated
+#     module (from a .hsc/.x/.y file) is put next to the generated source,
+#     which is where GHC looks for it.
 #   - support for build rules generated from Cabal packages:
 #     - `cabal_component = (pkg, component)` causes this component's
 #       `cabal_macros.h` file to be included when `{-# LANGUAGE CPP #-}`
@@ -98,11 +102,48 @@ def _resolve_src(name, src, deps, hsc_flags, hsc_cxx):
     else:
         return src
 
-def _resolve_srcs(name, srcs, deps, hsc_flags, hsc_cxx):
-    if type(srcs) == type({}):
-        return { modl: _resolve_src(name, src, deps, hsc_flags, hsc_cxx) for modl, src in srcs.items() }
-    else:
+def _with_boot_impl(ctx: AnalysisContext) -> list[Provider]:
+    boot_path = paths.split_extension(ctx.attrs.path)[0] + paths.split_extension(ctx.attrs.boot.short_path)[1]
+    srcs = ctx.actions.symlinked_dir("srcs", {ctx.attrs.path: ctx.attrs.src, boot_path: ctx.attrs.boot}, has_content_based_path = False)
+    return [DefaultInfo(sub_targets = {
+        "boot": [DefaultInfo(default_output = srcs.project(boot_path))],
+        "src": [DefaultInfo(default_output = srcs.project(ctx.attrs.path))],
+    })]
+
+# A generated source of a module (`path` is where it would be in the package),
+# with the module's boot file next to it, which is where GHC looks for it.
+_with_boot = rule(
+    impl = _with_boot_impl,
+    attrs = {
+        "boot": attrs.source(),
+        "path": attrs.string(),
+        "src": attrs.source(),
+    },
+)
+
+def _resolve_srcs(name, srcs, boot_srcs, deps, hsc_flags, hsc_cxx):
+    if type(srcs) != type({}):
+        if boot_srcs:
+            fail("{}: boot_srcs needs srcs to be a dict, by module name".format(name))
         return [ _resolve_src(name, src, deps, hsc_flags, hsc_cxx) for src in srcs ]
+    unknown = [modl for modl in boot_srcs if modl not in srcs]
+    if unknown:
+        fail("{}: boot_srcs for modules not in srcs: {}".format(name, ", ".join(unknown)))
+    resolved = {}
+    for modl, src in srcs.items():
+        resolved_src = _resolve_src(name, src, deps, hsc_flags, hsc_cxx)
+        boot = boot_srcs.get(modl)
+        if boot == None:
+            resolved[modl] = resolved_src
+        elif resolved_src == src:
+            resolved[modl] = src
+            resolved[modl + "-boot"] = boot
+        else:
+            rule_name = name + "-boot-" + modl
+            _with_boot(name = rule_name, src = resolved_src, boot = boot, path = paths.replace_extension(src, ".hs"))
+            resolved[modl] = ":" + rule_name + "[src]"
+            resolved[modl + "-boot"] = ":" + rule_name + "[boot]"
+    return resolved
 
 def haskell_library(
         name,
@@ -113,12 +154,13 @@ def haskell_library(
         hsc_flags = [],
         hsc_cxx = True,
         cabal_component = None,
+        boot_srcs = {},
         **kwargs):
     all_deps = deps + _package_deps(packages)
     kwargs.setdefault("preferred_linkage", _BUILD_MODE_PREFERRED_LINKAGE)
     native.haskell_library(
         name = name,
-        srcs = _resolve_srcs(name, srcs, all_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
+        srcs = _resolve_srcs(name, srcs, boot_srcs, all_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
         compiler_flags = compiler_flags + _BUILD_MODE_HASKELL_FLAGS + _cabal_macros_include_flags(cabal_component),
         deps = all_deps,
         **kwargs
@@ -134,13 +176,14 @@ def haskell_binary(
         hsc_cxx = True,
         linker_flags = [],
         cabal_component = None,  # see haskell_library()
+        boot_srcs = {},  # see haskell_library()
         **kwargs):
     all_deps = deps + _package_deps(packages)
     kwargs.setdefault("link_style", _BUILD_MODE_LINK_STYLE)
     kwargs.setdefault("enable_profiling", _PROF_ENABLED)
     native.haskell_binary(
         name = name,
-        srcs = _resolve_srcs(name, srcs, all_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
+        srcs = _resolve_srcs(name, srcs, boot_srcs, all_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
         compiler_flags = compiler_flags + _BUILD_MODE_HASKELL_FLAGS + _ASAN_LINKER_FLAGS + _cabal_macros_include_flags(cabal_component),
         deps = all_deps,
         linker_flags = _ASAN_LINKER_FLAGS + linker_flags,
