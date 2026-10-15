@@ -87,6 +87,8 @@ load(
     "attr_deps_profiling_link_infos",
     "attr_deps_shared_library_infos",
     "get_artifact_suffix",
+    "haskell_library_name",
+    "haskell_library_unit_id",
     "is_haskell_src",
     "output_extensions",
     "src_to_module_name",
@@ -912,20 +914,8 @@ def haskell_library_impl(ctx: AnalysisContext) -> list[Provider]:
     indexing_tsets = {}
     sub_targets = {}
 
-    # A package path containing a literal "." (e.g. a directory unpacked
-    # from a versioned tarball, like "hackage-security-0.6.4.0") isn't
-    # just cosmetic here: ghc-pkg's own .conf parser rejects a "name:"/
-    # "id:"/"key:" token containing *any* hyphen-delimited component
-    # that's purely numeric unless it's the token's very last component
-    # (it's parsing for a trailing name-version split, same as any
-    # ordinary "foo-1.2.3" package identifier) - confirmed empirically:
-    # both a literal "." and a plain "_"-for-"." substitution (still
-    # hyphenated into an all-digits component by the final "_" -> "-"
-    # below) fail the same way ("unexpected Empty component, after ..."),
-    # while splicing in a letter so the component is never purely numeric
-    # (e.g. "0.6.4.0" -> "0d6d4d0") is accepted regardless of position.
-    libname = repr(ctx.label.path).replace("//", "_").replace("/", "_").replace(".", "d").removesuffix("_") + "_" + ctx.label.name
-    pkgname = libname.replace("_", "-")
+    libname = haskell_library_name(ctx.label)
+    pkgname = haskell_library_unit_id(ctx.label)
 
     haskell_toolchain = ctx.attrs._haskell_toolchain[HaskellToolchainInfo]
     native_shared_libs_dir = (

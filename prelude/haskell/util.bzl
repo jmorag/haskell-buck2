@@ -44,6 +44,28 @@ def srcs_to_pairs(srcs) -> list[(str, Artifact)]:
     else:
         return [(src_to_module_name(src.short_path), src) for src in srcs]
 
+# The name of the files of a haskell_library() (lib<name>.a, say), from its
+# label.
+#
+# A package path containing a literal "." (e.g. a directory unpacked
+# from a versioned tarball, like "hackage-security-0.6.4.0") isn't
+# just cosmetic here: ghc-pkg's own .conf parser rejects a "name:"/
+# "id:"/"key:" token containing *any* hyphen-delimited component
+# that's purely numeric unless it's the token's very last component
+# (it's parsing for a trailing name-version split, same as any
+# ordinary "foo-1.2.3" package identifier) - confirmed empirically:
+# both a literal "." and a plain "_"-for-"." substitution (still
+# hyphenated into an all-digits component by the final "_" -> "-"
+# below) fail the same way ("unexpected Empty component, after ..."),
+# while splicing in a letter so the component is never purely numeric
+# (e.g. "0.6.4.0" -> "0d6d4d0") is accepted regardless of position.
+def haskell_library_name(label: Label | TargetLabel) -> str:
+    return repr(label.path).replace("//", "_").replace("/", "_").replace(".", "d").removesuffix("_") + "_" + label.name
+
+# The unit id of a haskell_library(), from its label.
+def haskell_library_unit_id(label: Label | TargetLabel) -> str:
+    return haskell_library_name(label).replace("_", "-")
+
 def is_haskell_src(x: Artifact) -> bool:
     _, ext = paths.split_extension(x.short_path)
     return ext in HASKELL_EXTENSIONS
