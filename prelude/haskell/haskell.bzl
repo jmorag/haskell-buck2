@@ -378,14 +378,16 @@ def _srcs_to_objfiles(ctx: AnalysisContext, odir: Artifact, osuf: str) -> list[A
             objfiles.append(odir.project(module_name_to_file(modl, osuf)))
     return objfiles
 
+# The packager is the rest of the arguments: it may be a command with
+# arguments of its own.
 _REGISTER_PACKAGE = """\
 set -eu
-GHC_PKG=$1
-DB=$2
-PKGCONF=$3
-ALWAYS_USE_CACHE=$4
-"$GHC_PKG" init "$DB"
-"$GHC_PKG" register --package-conf "$DB" --no-expand-pkgroot $ALWAYS_USE_CACHE "$PKGCONF"
+DB=$1
+PKGCONF=$2
+ALWAYS_USE_CACHE=$3
+shift 3
+"$@" init "$DB"
+"$@" register --package-conf "$DB" --no-expand-pkgroot $ALWAYS_USE_CACHE "$PKGCONF"
 """
 
 # Create a package
@@ -517,10 +519,10 @@ def _make_package(
                 "-c",
                 _REGISTER_PACKAGE,
                 "",
-                haskell_toolchain.packager,
                 db.as_output(),
                 pkg_conf,
                 use_cache_arg,
+                haskell_toolchain.packager,
             ],
             # needs hi, because ghc-pkg checks that the .hi files exist
             hidden = hi.values() + lib.values() + ([own_shared_lib] if own_shared_lib != None else []),
