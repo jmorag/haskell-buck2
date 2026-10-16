@@ -37,6 +37,7 @@
 #         "asm_sources": [str], "asm_options": [str],
 #         "include_dirs": [str], "pkgconfig": [str],
 #         "hsc_options": [str],               # defines for hsc2hs's C compiler (the platform)
+#         "exposed": bool,                    # False: the library's package isn't exposed (a library's)
 #         "generated_include_dirs": [str],    # headers that `./configure` generated (relative to the project root)
 #         "test_args": [str],                 # test-suites only
 #       },
@@ -386,6 +387,7 @@ def _haskell_kwargs(c, spec, cxx_deps):
         unit_id = _this_unit_id(compiler_flags)
         if unit_id:
             kwargs["unit_id"] = unit_id
+        kwargs["exposed"] = c.get("exposed", True)
         if c.get("reexports"):
             kwargs["reexported_modules"] = {r["module"]: (_dep_label(r["from"]) if "from" in r else None, r["original"]) for r in c["reexports"]}
         lib_dirs = _lib_dir_flags(c, pkg_dir)
