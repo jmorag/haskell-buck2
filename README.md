@@ -25,6 +25,25 @@ buck2 build my-package:my-program -m opt
 
 There are other build options that can be selected in a similar way, such as `-m prof` to enable profiling. See `constraints/BUCK` for details.
 
+# Compiler and linker flags from the environment
+
+buck2 runs every build action with a clean environment, so directories that
+a shell makes visible to the compiler and linker through variables such as
+`LIBRARY_PATH` or `CPATH` (a Nix or Homebrew shell, say) are not seen by GHC.
+Give them to the Haskell toolchain through the project's buckconfig instead,
+normally in a `.buckconfig.local` next to the `.buckconfig` at the root of
+the project (it is read in addition to `.buckconfig`, and is for files that
+don't belong in version control):
+
+```
+[haskell]
+  compiler_flags = -I/opt/homebrew/include
+  linker_flags = -L/opt/homebrew/lib -L/opt/zlib/lib
+```
+
+Both are space-separated lists of flags for every GHC invocation;
+`compiler_flags` go to each compile and `linker_flags` to each link.
+
 # Testing this repo
 
 This repository has no tests or CI of its own: it is the Buck2 support code for
