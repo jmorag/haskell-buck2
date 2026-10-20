@@ -132,10 +132,22 @@ def _src(pkg_dir, src):
 def _provided(src):
     return type(src) == type({}) and src.get("provided", False)
 
+def _main_module(c):
+    # The module of a component's main-is file is Main, unless its
+    # ghc-options say otherwise with `-main-is Mod` or `-main-is Mod.fn`, in
+    # which case the component may have an ordinary other-module called Main
+    # as well. A bare `-main-is fn` keeps module Main.
+    opts = c.get("ghc_options", [])
+    for i in range(len(opts) - 1):
+        if opts[i] == "-main-is" and opts[i + 1][0].isupper():
+            mod, _, last = opts[i + 1].rpartition(".")
+            return mod if mod and last[0].islower() else opts[i + 1]
+    return "Main"
+
 def _srcs(c, pkg_dir):
     srcs = {}
     if "main_is" in c:
-        srcs["Main"] = _src(pkg_dir, c["main_is"])
+        srcs[_main_module(c)] = _src(pkg_dir, c["main_is"])
     for module, src in c.get("srcs", {}).items():
         if not _provided(src):
             srcs[module] = _src(pkg_dir, src)
