@@ -35,8 +35,15 @@ def default_haskell_toolchain(name, **kwargs):
     kwargs.setdefault("packager", CABAL_GHC_PKG)
     kwargs.setdefault("haddock", "haddock")
     kwargs.setdefault("hsc2hs", CABAL_HSC2HS)
-    kwargs.setdefault("compiler_flags", [])
-    kwargs.setdefault("linker_flags", [])
+    # Flags for every compile and link, from the project's buckconfig (a
+    # machine-local .buckconfig.local, usually: see the README). buck2 runs
+    # actions with a clean environment, so the -L and -I directories that a
+    # shell sets up (LIBRARY_PATH, CPATH, a Nix or Homebrew shell's flags)
+    # don't reach GHC any other way. The root cell's config, not this
+    # cell's: the project's .buckconfig is at the root, and read_config()
+    # here would read the toolchains cell's own (nonexistent) one.
+    kwargs.setdefault("compiler_flags", read_root_config("haskell", "compiler_flags", "").split())
+    kwargs.setdefault("linker_flags", read_root_config("haskell", "linker_flags", "").split())
     # GHC_DYNAMIC comes from buck2/gen-haskell-prebuilt.py's own probe
     # of this specific `ghc` binary (`ghc --info`'s `("GHC Dynamic",
     # ...)` entry) - not assumed - so retargeting GHC (per this file's
