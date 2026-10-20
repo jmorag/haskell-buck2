@@ -382,11 +382,14 @@ def _haskell_kwargs(c, spec, cxx_deps):
         exported = _nub(lib_dirs + ["-l" + l for l in c.get("extra_libraries", [])] + c.get("ld_options", []))
         if exported:
             kwargs["exported_linker_flags"] = exported
-        # The library's own shared object needs the directories too, for
-        # whatever it links against itself.
-        own_link = lib_dirs + _ld_flags(c)
+        # The library's own shared object must link against them too, not
+        # only whatever finally links the library in: GHC loads the .so to
+        # run Template Haskell splices in dependents, and that fails on any
+        # symbol it leaves unresolved. (ld_options reach GHC's command line
+        # with -optl here, unlike the raw flags that dependents are given.)
+        own_link = lib_dirs + ["-l" + l for l in c.get("extra_libraries", [])] + _ld_flags(c)
         if own_link:
-            kwargs["linker_flags"] = own_link
+            kwargs["linker_flags"] = _nub(own_link)
     else:
         linker_flags = _linker_flags(c, pkg_dir, project_ghc_options)
         if linker_flags:
