@@ -619,7 +619,16 @@ def _link_haskell_shared_lib(
         prefer_stripped = False,
         transformation_spec_context = None,
     )
-    link.add(cmd_args(unpack_link_args(infos), prepend = "-optl"))
+    # Attached (`-optlX`), not `-optl X`: a dependency's link args can be an
+    # @argsfile (prebuilt_cxx_library's exported_linker_flags, as made by
+    # external_pkgconfig_library), and ghc expands @files on its own command
+    # line before it looks at flags. Separated, `-optl` would pair with the
+    # file's first argument only, the rest would be taken for ghc flags
+    # (`-Wl,-E` becomes an unrecognised warning flag), and an empty file
+    # leaves `-optl` to swallow the next `-optl`, so that cc sees a literal
+    # `-optl`, reads it as `-o ptl`, and the link's real output never
+    # appears. Attached, ghc passes `@file` through and cc expands it.
+    link.add(cmd_args(unpack_link_args(infos), format = "-optl{}"))
     ctx.actions.run(
         link,
         category = category,
@@ -1418,7 +1427,8 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
     # first-class ordering mode already implemented in buck2's own tset
     # machinery - not a workaround - haskell_binary_impl here just never
     # requested it, always taking the `unpack_link_args` default.
-    link_args.add(cmd_args(unpack_link_args(infos, link_ordering = LinkOrdering("topological")), prepend = "-optl"))
+    # Attached `-optl{}`, not `prepend = "-optl"`: see _link_haskell_shared_lib.
+    link_args.add(cmd_args(unpack_link_args(infos, link_ordering = LinkOrdering("topological")), format = "-optl{}"))
 
     link.add(
         at_argfile(
