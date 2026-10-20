@@ -26,6 +26,7 @@
 #         "ghc_options": [str], "cpp_options": [str],
 #         "language": str, "extensions": [str],
 #         "extra_libraries": [str],
+#         "extra_lib_dirs": [str],            # where to find them: extra-lib-dirs as configured, so with pkgconfig-depends' directories
 #         "deps": [dep],                      # see below
 #         "reexports": [{"module": str, "original": str, "from": dep}],  # libraries only; no "from" for a module of the library itself
 #         "build_tools": [{"exe": str, "package": str} | {"exe": str, "external": True}],  # package: built by this project
@@ -160,6 +161,14 @@ def _include_flags(c, pkg_dir):
     dirs = [d if pkg_dir == "." or d.startswith("/") else pkg_dir + "/" + d for d in c.get("include_dirs", [])]
     return _nub(["-I" + d for d in dirs + c.get("generated_include_dirs", [])])
 
+def _lib_dir_flags(c, pkg_dir):
+    # Where the linker looks for the component's extra_libraries: its
+    # extra-lib-dirs, which Cabal has already extended with the directories
+    # of its pkgconfig-depends at configure time. Package-relative, like
+    # include_dirs, so made relative to the root of the project the same way.
+    dirs = [d if pkg_dir == "." or d.startswith("/") else pkg_dir + "/" + d for d in c.get("extra_lib_dirs", [])]
+    return _nub(["-L" + d for d in dirs])
+
 def _haskell_flags(c, pkg_dir, project_ghc_options):
     # default-language isn't just documentation: GHC2021/GHC2024 each imply a
     # bundle of extensions, so leaving it out would silently fall back to
@@ -172,13 +181,13 @@ def _haskell_flags(c, pkg_dir, project_ghc_options):
     own += _include_flags(c, pkg_dir)
     return _nub(own) + project_ghc_options
 
-def _linker_flags(c, project_ghc_options):
+def _linker_flags(c, pkg_dir, project_ghc_options):
     # haskell_binary and haskell_test pass compiler_flags to each module's
     # compile step only, not to the final link, whereas Cabal gives a
     # component's whole ghc-options to every ghc invocation. So anything
     # link-relevant there (-threaded, -rtsopts) has to reach linker_flags
     # too; compile-only flags like -Wall are ignored by ghc when linking.
-    own = ["-l" + l for l in c.get("extra_libraries", [])] + list(c.get("ghc_options", []))
+    own = _lib_dir_flags(c, pkg_dir) + ["-l" + l for l in c.get("extra_libraries", [])] + list(c.get("ghc_options", []))
     return _nub(own) + project_ghc_options
 
 def _dep_label(d):
@@ -309,7 +318,7 @@ def _cxx_binary(c, pkg_dir, pkgconfig_seen, overrides):
     include_flags = _include_flags(c, pkg_dir)
     if include_flags:
         kwargs["preprocessor_flags"] = include_flags
-    linker_flags = ["-l" + l for l in c.get("extra_libraries", [])]
+    linker_flags = _lib_dir_flags(c, pkg_dir) + ["-l" + l for l in c.get("extra_libraries", [])]
     if linker_flags:
         kwargs["linker_flags"] = _nub(linker_flags)
     cxx_binary(**_merge(kwargs, overrides))
@@ -361,11 +370,16 @@ def _haskell_kwargs(c, spec, cxx_deps):
             kwargs["package_version"] = spec["package"]["version"]
         if c.get("reexports"):
             kwargs["reexported_modules"] = {r["module"]: (_dep_label(r["from"]) if "from" in r else None, r["original"]) for r in c["reexports"]}
-        exported = _nub(["-l" + l for l in c.get("extra_libraries", [])])
+        lib_dirs = _lib_dir_flags(c, pkg_dir)
+        exported = _nub(lib_dirs + ["-l" + l for l in c.get("extra_libraries", [])])
         if exported:
             kwargs["exported_linker_flags"] = exported
+        # The library's own shared object needs the directories too, for
+        # whatever it links against itself.
+        if lib_dirs:
+            kwargs["linker_flags"] = lib_dirs
     else:
-        linker_flags = _linker_flags(c, project_ghc_options)
+        linker_flags = _linker_flags(c, pkg_dir, project_ghc_options)
         if linker_flags:
             kwargs["linker_flags"] = linker_flags
     if packages:
