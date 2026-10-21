@@ -167,14 +167,16 @@ def haskell_library(
         hsc_cxx = True,
         cabal_component = None,
         boot_srcs = {},
+        internal_deps = [],
         **kwargs):
     all_deps = deps + _package_deps(packages)
     kwargs.setdefault("preferred_linkage", _BUILD_MODE_PREFERRED_LINKAGE)
     native.haskell_library(
         name = name,
-        srcs = _resolve_srcs(name, srcs, boot_srcs, all_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
+        srcs = _resolve_srcs(name, srcs, boot_srcs, all_deps + internal_deps, hsc_flags + _cabal_macros_hsc_flags(cabal_component), hsc_cxx),
         compiler_flags = compiler_flags + _BUILD_MODE_HASKELL_FLAGS + _cabal_macros_include_flags(cabal_component),
         deps = all_deps,
+        internal_deps = internal_deps,
         **kwargs
     )
 

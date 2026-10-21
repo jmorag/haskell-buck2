@@ -84,7 +84,6 @@ load(
     "attr_deps",
     "attr_deps_haskell_link_infos_sans_template_deps",
     "attr_deps_merged_link_infos",
-    "attr_deps_profiling_link_infos",
     "attr_deps_shared_library_infos",
     "get_artifact_suffix",
     "haskell_library_name",
@@ -119,6 +118,7 @@ load(
     "get_lib_output_style",
     "get_link_args_for_strategy",
     "get_output_styles_for_linkage",
+    "get_own_link_infos",
     "legacy_output_style_to_link_style",
     "to_link_strategy",
     "unpack_link_args",
@@ -606,7 +606,8 @@ def _link_haskell_shared_lib(
                 prepend = "-optl",
             ),
         ]
-        + [objfiles],
+        # The objects of its internal_deps are part of it, as in its archive.
+        + [objfiles, _internal_objects(ctx, LinkStyle("shared"))],
         hidden = hidden,
     )
 
@@ -734,7 +735,7 @@ def _build_haskell_lib(
         # TODO: avoid making an archive for a single object, like cxx does
         # (but would that work with Template Haskell?)
         # TODO: Opt haskell actions into content based paths.
-        archive = make_archive(ctx, lib_short_path, objfiles, force_disable_content_based_path = True)
+        archive = make_archive(ctx, lib_short_path, objfiles + _internal_objects(ctx, link_style), force_disable_content_based_path = True)
         lib = archive.artifact
         libs = [lib] + (archive.external_objects if archive.archive_contents_type == ArchiveContentsType("thin") else [])
         link_infos = LinkInfos(
@@ -900,15 +901,37 @@ def _build_haskell_lib(
 
     return (main_output, shared_output)
 
+def _internal_objects(ctx: AnalysisContext, link_style: LinkStyle) -> list[Artifact]:
+    # The objects of the library's internal_deps, which its archive has in
+    # it as well as its own.
+    objects = []
+    for dep in ctx.attrs.internal_deps:
+        infos = get_own_link_infos(dep[MergedLinkInfo], to_link_strategy(link_style))
+        if infos == None:
+            fail("{}: internal dependency {} has nothing to link for {} linking".format(ctx.label, dep.label, link_style.value))
+        for linkable in infos.default.linkables:
+            if not hasattr(linkable, "objects"):
+                fail("{}: internal dependency {} isn't objects, which the library's archive can include (use_archive = False, for a cxx_library)".format(ctx.label, dep.label))
+            objects.extend(linkable.objects)
+    return objects
+
+def _exported_link_infos(ctx: AnalysisContext, enable_profiling: bool) -> list[MergedLinkInfo]:
+    # The link infos of the library's dependencies, but not of its
+    # internal_deps.
+    return filter(None, [
+        (d.get(HaskellProfLinkInfo).prof_infos if enable_profiling and d.get(HaskellProfLinkInfo) else d.get(MergedLinkInfo))
+        for d in ctx.attrs.deps
+    ])
+
 def haskell_library_impl(ctx: AnalysisContext) -> list[Provider]:
     preferred_linkage = _attr_preferred_linkage(ctx)
     if ctx.attrs.enable_profiling and preferred_linkage == Linkage("any"):
         preferred_linkage = Linkage("static")
 
-    # Get haskell and native link infos from all deps
+    # Get haskell and native link infos from all deps (but not internal_deps,
+    # whose objects are the library's own)
     hlis = attr_deps_haskell_link_infos_sans_template_deps(ctx)
-    nlis = attr_deps_merged_link_infos(ctx)
-    prof_nlis = attr_deps_profiling_link_infos(ctx)
+    nlis = attr_deps_merged_link_infos(ctx, ctx.attrs.deps)
     shared_library_infos = attr_deps_shared_library_infos(ctx)
 
     solibs = {}
@@ -1058,13 +1081,16 @@ def haskell_library_impl(ctx: AnalysisContext) -> list[Provider]:
         prof_link_infos[LinkStyle("shared")] = link_infos[LinkStyle("shared")]
 
     default_link_infos = prof_link_infos if ctx.attrs.enable_profiling else link_infos
-    default_native_infos = prof_nlis if ctx.attrs.enable_profiling else nlis
     merged_link_info = create_merged_link_info(
         ctx,
         pic_behavior = pic_behavior,
         link_infos = {_to_lib_output_style(s): v for s, v in default_link_infos.items()},
         preferred_linkage = preferred_linkage,
-        exported_deps = default_native_infos,
+        # Haskell code may refer to the code of any library below it (through
+        # inlining), so the libraries it depends on are linked with it, but
+        # not those that are part of it (its internal_deps, in its archive or
+        # linked into its shared library).
+        exported_deps = _exported_link_infos(ctx, enable_profiling = ctx.attrs.enable_profiling),
     )
 
     prof_merged_link_info = create_merged_link_info(
@@ -1072,7 +1098,7 @@ def haskell_library_impl(ctx: AnalysisContext) -> list[Provider]:
         pic_behavior = pic_behavior,
         link_infos = {_to_lib_output_style(s): v for s, v in prof_link_infos.items()},
         preferred_linkage = preferred_linkage,
-        exported_deps = prof_nlis,
+        exported_deps = _exported_link_infos(ctx, enable_profiling = True),
     )
 
     linkable_graph = create_linkable_graph(

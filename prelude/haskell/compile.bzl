@@ -21,6 +21,7 @@ load(
 )
 load(
     "@prelude//haskell:util.bzl",
+    "attr_deps",
     "attr_deps_haskell_lib_infos",
     "attr_deps_haskell_link_infos",
     "get_artifact_suffix",
@@ -230,7 +231,7 @@ def compile_args(ctx: AnalysisContext, link_style: LinkStyle, enable_profiling: 
     #   foreign import capi "Header.h ..." ...
     # generates a C file that includes Header.h, so we need to pass the
     # preprocessor options via -optc too.
-    inherited_pre = cxx_inherited_preprocessor_infos(ctx.attrs.deps)
+    inherited_pre = cxx_inherited_preprocessor_infos(attr_deps(ctx))
     pre = cxx_merge_cpreprocessors(ctx.actions, [], inherited_pre)
     pre_args = pre.set.project_as_args("args")
     compile_args.add(cmd_args(pre_args, format = "-optP={}"))

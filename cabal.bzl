@@ -243,14 +243,20 @@ def _build_tool_depends(build_tools):
             labels.append(_third_party_label(t["exe"] + "-exe"))
     return _nub(labels)
 
-def _cxx_kwargs(c, pkgconfig_seen, srcs):
-    # The attributes of a C/C++ rule that compiles `srcs` with the
-    # component's options.
+def _pkgconfig_deps(c, pkgconfig_seen):
+    # The targets of the component's pkgconfig-depends, created by the first
+    # component of the package that has them.
     pkgconfig = _nub(c.get("pkgconfig", []))
     for p in pkgconfig:
         if p not in pkgconfig_seen:
             pkgconfig_seen[p] = True
             external_pkgconfig_library(name = "pkgconfig-" + p, package = p, visibility = ["PUBLIC"])
+    return [":pkgconfig-" + p for p in pkgconfig]
+
+def _cxx_kwargs(c, pkgconfig_seen, srcs):
+    # The attributes of a C/C++ rule that compiles `srcs` with the
+    # component's options.
+    pkgconfig = _pkgconfig_deps(c, pkgconfig_seen)
 
     kwargs = {"srcs": srcs, "visibility": ["PUBLIC"]}
 
@@ -264,7 +270,7 @@ def _cxx_kwargs(c, pkgconfig_seen, srcs):
     }
     kwargs["lang_compiler_flags"] = {lang: flags for lang, flags in lang_flags.items() if flags}
 
-    kwargs["deps"] = [":pkgconfig-" + p for p in pkgconfig]
+    kwargs["deps"] = pkgconfig
 
     return kwargs
 
@@ -292,6 +298,13 @@ def _cxx_library(c, pkg_dir, pkgconfig_seen):
     include_flags = _include_flags(c, pkg_dir)
     if include_flags:
         kwargs["exported_preprocessor_flags"] = include_flags
+    # Like the C of a Cabal package, it is all part of the library of the
+    # component's Haskell code (see `internal_deps` of haskell_library()):
+    # the RTS's C, say, calls hidden functions of its Cmm, which only resolve
+    # within one shared library.
+    kwargs["preferred_linkage"] = "static"
+    kwargs["link_whole"] = True
+    kwargs["use_archive"] = False
     cxx_library(name = name, **kwargs)
     return [":" + name]
 
@@ -353,12 +366,12 @@ def _cmm_library(c, spec):
     )
     return [":" + name]
 
-def _haskell_kwargs(c, spec, cxx_deps):
+def _haskell_kwargs(c, spec, helpers):
+    # `helpers` are the rules of the component's C/C++/Cmm code.
     pkg_dir = _this_dir(spec)
     project_ghc_options = list(spec.get("ghc_options", []))
     kind = c["kind"]
     packages, deps = _classify_deps(c.get("deps", []))
-    deps = _nub(deps + cxx_deps)
     kwargs = {
         "name": c["name"],
         "srcs": _srcs(c, pkg_dir),
@@ -387,6 +400,9 @@ def _haskell_kwargs(c, spec, cxx_deps):
         unit_id = _this_unit_id(compiler_flags)
         if unit_id:
             kwargs["unit_id"] = unit_id
+        # The code of the helpers is part of the library, as in Cabal.
+        if helpers:
+            kwargs["internal_deps"] = helpers
         kwargs["exposed"] = c.get("exposed", True)
         if c.get("reexports"):
             kwargs["reexported_modules"] = {r["module"]: (_dep_label(r["from"]) if "from" in r else None, r["original"]) for r in c["reexports"]}
@@ -405,6 +421,7 @@ def _haskell_kwargs(c, spec, cxx_deps):
         if own_link:
             kwargs["linker_flags"] = _nub(own_link)
     else:
+        deps = deps + helpers
         linker_flags = _linker_flags(c, pkg_dir, project_ghc_options)
         if linker_flags:
             kwargs["linker_flags"] = linker_flags
@@ -476,8 +493,11 @@ def cabal_targets(spec, defaults = {}, overrides = {}, transform = None, rules =
             _cxx_binary(c, pkg_dir, pkgconfig_seen, _merge(project_overrides.get(c["name"], {}), overrides.get(c["name"], {})))
             continue
         kind = c["kind"]
-        cxx_deps = _cxx_library(c, pkg_dir, pkgconfig_seen) + _cmm_library(c, spec)
-        kwargs = _haskell_kwargs(c, spec, cxx_deps)
+        helpers = _cxx_library(c, pkg_dir, pkgconfig_seen) + _cmm_library(c, spec)
+        kwargs = _haskell_kwargs(c, spec, helpers)
+
+        # The helpers' own dependencies are linked with the component's.
+        kwargs["deps"] = kwargs.get("deps", []) + _pkgconfig_deps(c, pkgconfig_seen)
         kwargs = _merge(kwargs, defaults.get("*", {}))
         kwargs = _merge(kwargs, defaults.get(kind, {}))
         kwargs = _merge(kwargs, project_overrides.get(c["name"], {}))

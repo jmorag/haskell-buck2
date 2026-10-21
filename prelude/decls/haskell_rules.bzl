@@ -185,6 +185,14 @@ haskell_library = prelude_rule(
             "ghci_platform_preload_deps": attrs.list(attrs.tuple(attrs.regex(), attrs.set(attrs.dep(), sorted = True)), default = []),
             "ghci_preload_deps": attrs.set(attrs.dep(), sorted = True, default = []),
             "haddock_flags": attrs.list(attrs.arg(), default = []),
+            # Libraries that are part of this one, as the C of a Cabal package
+            # is part of its library: their objects are in its archive, and
+            # linked into its shared library, and what depends on it isn't
+            # linked with them again (nor with their own dependencies, which
+            # the library should depend on). They should have static
+            # preferred linkage, and their link info be objects
+            # (use_archive = False, for a cxx_library).
+            "internal_deps": attrs.list(attrs.dep(), default = []),
             # Whether the library's package is exposed: for a GHC that uses
             # its package database as an installed one (as its global one,
             # say). The build itself hides all packages.
