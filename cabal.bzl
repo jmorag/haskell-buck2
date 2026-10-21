@@ -162,6 +162,15 @@ def _include_flags(c, pkg_dir):
     dirs = [d if pkg_dir == "." or d.startswith("/") else pkg_dir + "/" + d for d in c.get("include_dirs", [])]
     return _nub(["-I" + d for d in dirs + c.get("generated_include_dirs", [])])
 
+def _this_unit_id(flags):
+    # The unit id that a package's options give its library, as those of a
+    # package that GHC knows by its unit id do (rts, ghc-internal).
+    unit_id = None
+    for i, flag in enumerate(flags):
+        if flag == "-this-unit-id" and i + 1 < len(flags):
+            unit_id = flags[i + 1]
+    return unit_id
+
 def _lib_dir_flags(c, pkg_dir):
     # Where the linker looks for the component's extra_libraries: its
     # extra-lib-dirs, which Cabal has already extended with the directories
@@ -374,6 +383,9 @@ def _haskell_kwargs(c, spec, cxx_deps):
         kwargs["package_name"] = spec["package"]["name"]
         if "version" in spec["package"]:
             kwargs["package_version"] = spec["package"]["version"]
+        unit_id = _this_unit_id(compiler_flags)
+        if unit_id:
+            kwargs["unit_id"] = unit_id
         if c.get("reexports"):
             kwargs["reexported_modules"] = {r["module"]: (_dep_label(r["from"]) if "from" in r else None, r["original"]) for r in c["reexports"]}
         lib_dirs = _lib_dir_flags(c, pkg_dir)

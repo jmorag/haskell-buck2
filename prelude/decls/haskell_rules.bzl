@@ -195,6 +195,10 @@ haskell_library = prelude_rule(
             # the dependency and the module's original name (the
             # `reexported-modules` of a Cabal package).
             "reexported_modules": attrs.dict(attrs.string(), attrs.tuple(attrs.option(attrs.dep()), attrs.string()), default = {}),
+            # The library's unit id, when it must be a particular one (that of
+            # a package GHC knows by its unit id, say: rts, ghc-internal).
+            # Otherwise it is derived from the label.
+            "unit_id": attrs.option(attrs.string(), default = None),
             # Its version, which GHC defines `VERSION_<package>` macros with:
             # they must agree with the ones of the package's cabal_macros.h.
             "package_version": attrs.option(attrs.string(), default = None),
