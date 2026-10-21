@@ -171,7 +171,8 @@ def _lib_dir_flags(c, pkg_dir):
     return _nub(["-L" + d for d in dirs])
 
 def _ld_flags(c):
-    # ld-options are for the linker itself: GHC passes them on with -optl.
+    # ld-options are for the linker itself: they reach it from GHC's command
+    # line with -optl.
     return _nub(["-optl" + f for f in c.get("ld_options", [])])
 
 def _haskell_flags(c, pkg_dir, project_ghc_options):
@@ -376,7 +377,9 @@ def _haskell_kwargs(c, spec, cxx_deps):
         if c.get("reexports"):
             kwargs["reexported_modules"] = {r["module"]: (_dep_label(r["from"]) if "from" in r else None, r["original"]) for r in c["reexports"]}
         lib_dirs = _lib_dir_flags(c, pkg_dir)
-        exported = _nub(lib_dirs + ["-l" + l for l in c.get("extra_libraries", [])] + _ld_flags(c))
+        # Raw flags: the link of whatever depends on the library hands these
+        # to the linker itself (as -optl) already.
+        exported = _nub(lib_dirs + ["-l" + l for l in c.get("extra_libraries", [])] + c.get("ld_options", []))
         if exported:
             kwargs["exported_linker_flags"] = exported
         # The library's own shared object needs the directories too, for
