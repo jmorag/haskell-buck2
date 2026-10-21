@@ -602,7 +602,7 @@ def _link_haskell_shared_lib(
             get_shared_library_flags(linker_info.type),
             "-dynamic",
             cmd_args(
-                _get_haskell_shared_library_name_linker_flags(linker_info.type, libfile),
+                _get_haskell_shared_library_name_linker_flags(linker_info.type, _soname(ctx, libfile)),
                 prepend = "-optl",
             ),
         ]
@@ -728,7 +728,7 @@ def _build_haskell_lib(
             compiled.stubs,
             "haskell_link" + artifact_suffix.replace("-", "_"),
         )
-        solibs[libfile] = solib
+        solibs[_soname(ctx, libfile)] = solib
         libs = [lib]
 
     else:  # static flavours
@@ -860,7 +860,7 @@ def _build_haskell_lib(
         )
         shared_output = HaskellLibBuildOutput(
             hlib = shared_hlib,
-            solibs = {shared_libfile: shared_solib},
+            solibs = {_soname(ctx, shared_libfile): shared_solib},
             link_infos = shared_link_infos,
             compiled = compiled,
             libs = [shared_lib],
@@ -900,6 +900,10 @@ def _build_haskell_lib(
     )
 
     return (main_output, shared_output)
+
+def _soname(ctx: AnalysisContext, libfile: str) -> str:
+    # The soname of the library's shared library, whose file is `libfile`.
+    return ctx.attrs.soname or libfile
 
 def _internal_objects(ctx: AnalysisContext, link_style: LinkStyle) -> list[Artifact]:
     # The objects of the library's internal_deps, which its archive has in

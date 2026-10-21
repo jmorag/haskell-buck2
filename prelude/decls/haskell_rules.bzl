@@ -197,6 +197,9 @@ haskell_library = prelude_rule(
             # its package database as an installed one (as its global one,
             # say). The build itself hides all packages.
             "exposed": attrs.bool(default = False),
+            # The soname of the library's shared library, when it isn't its
+            # file's name.
+            "soname": attrs.option(attrs.string(), default = None),
             "linker_flags": attrs.list(attrs.arg(), default = []),
             # The name the library's package has in the package db, for
             # `import "name" Module`. Not its id, which is derived from the
