@@ -290,6 +290,16 @@ def compile(ctx: AnalysisContext, link_style: LinkStyle, enable_profiling: bool,
 
     args = compile_args(ctx, link_style, enable_profiling, pkgname, native_shared_libs_dir = native_shared_libs_dir, dynamic_too = dynamic_too)
 
+    # A library with no modules (all its code is C, say) has nothing for GHC
+    # to compile.
+    if not [src for _, src in srcs_to_pairs(ctx.attrs.srcs) if is_haskell_src(src)]:
+        result = args.result
+        ctx.actions.run(
+            cmd_args("mkdir", "-p", result.objects.as_output(), result.hi.as_output(), result.stubs.as_output()),
+            category = "haskell_compile_" + get_artifact_suffix(link_style, enable_profiling).replace("-", "_"),
+        )
+        return result
+
     compile_cmd.add(args.args_for_cmd)
 
     artifact_suffix = get_artifact_suffix(link_style, enable_profiling)
