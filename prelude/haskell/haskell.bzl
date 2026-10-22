@@ -1263,6 +1263,15 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
     if enable_profiling:
         link.add("-prof")
 
+    # Without this, GHC links its static RTS into a binary whose
+    # Haskell libraries are shared, and the linker discards whatever
+    # parts of it the binary itself doesn't use - but the shared
+    # libraries need them too, since they aren't linked against an RTS
+    # themselfs (which RTS - threaded or not - is only decided here).
+    # With it, GHC links the correct shared RTS instead.
+    if link_style == LinkStyle("shared"):
+        link.add("-dynamic")
+
     link_args = cmd_args("-package-env=-")
 
     osuf, _hisuf = output_extensions(link_style, enable_profiling)
