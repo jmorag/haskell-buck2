@@ -132,11 +132,13 @@ def _src(pkg_dir, src):
 def _provided(src):
     return type(src) == type({}) and src.get("provided", False)
 
+# If the Cabal file has `main-is: foo.hs` and `ghc-options: -main-is
+# Foo`, then the only way we can know the module of `foo.hs` is by
+# groveling around in `ghc-options` looking for `-main-is`.
+# This is fragile, but I don't see a better way to do it.
 def _main_module(c):
-    # The module of a component's main-is file is Main, unless its
-    # ghc-options say otherwise with `-main-is Mod` or `-main-is Mod.fn`, in
-    # which case the component may have an ordinary other-module called Main
-    # as well. A bare `-main-is fn` keeps module Main.
+    # Note that we have to support `-main-is Mod`, `-main-is Mod.fn` and
+    # `-main-is fn` (the latter is ignored)
     opts = c.get("ghc_options", [])
     for i in range(len(opts) - 1):
         if opts[i] == "-main-is" and opts[i + 1][0].isupper():
