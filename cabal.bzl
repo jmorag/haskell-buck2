@@ -132,10 +132,24 @@ def _src(pkg_dir, src):
 def _provided(src):
     return type(src) == type({}) and src.get("provided", False)
 
+# If the Cabal file has `main-is: foo.hs` and `ghc-options: -main-is
+# Foo`, then the only way we can know the module of `foo.hs` is by
+# groveling around in `ghc-options` looking for `-main-is`.
+# This is fragile, but I don't see a better way to do it.
+def _main_module(c):
+    # Note that we have to support `-main-is Mod`, `-main-is Mod.fn` and
+    # `-main-is fn` (the latter is ignored)
+    opts = c.get("ghc_options", [])
+    for i in range(len(opts) - 1):
+        if opts[i] == "-main-is" and opts[i + 1][0].isupper():
+            mod, _, last = opts[i + 1].rpartition(".")
+            return mod if mod and last[0].islower() else opts[i + 1]
+    return "Main"
+
 def _srcs(c, pkg_dir):
     srcs = {}
     if "main_is" in c:
-        srcs["Main"] = _src(pkg_dir, c["main_is"])
+        srcs[_main_module(c)] = _src(pkg_dir, c["main_is"])
     for module, src in c.get("srcs", {}).items():
         if not _provided(src):
             srcs[module] = _src(pkg_dir, src)
