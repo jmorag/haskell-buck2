@@ -1476,8 +1476,10 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
             out = sos_dir,
             shared_libs = sos,
         )
-        rpath_ref = get_rpath_origin(get_cxx_toolchain_info(ctx).linker_info.type)
+        linker_type = get_cxx_toolchain_info(ctx).linker_info.type
+        rpath_ref = get_rpath_origin(linker_type)
         rpath_ldflag = "-Wl,{}/{}".format(rpath_ref, sos_dir)
+        is_gnu_linker = linker_type == LinkerType("gnu")
 
         # `--disable-new-dtags`: without it, GNU ld's default emits the
         # modern DT_RUNPATH tag for `-rpath`, which the dynamic loader only
@@ -1500,7 +1502,9 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
         # resolution, not just the object that carries it - exactly what a
         # dependency chain of arbitrary depth needs, without requiring every
         # library along the way to separately carry its own rpath.
-        link.add("-optl", "-Wl,--disable-new-dtags")
+        # (GNU ld only: Mach-O has no such distinction.)
+        if is_gnu_linker:
+            link.add("-optl", "-Wl,--disable-new-dtags")
         link.add("-optl", "-Wl,-rpath", "-optl", rpath_ldflag)
 
         # `-rpath` (above) only takes effect once the *finished binary* runs
@@ -1526,7 +1530,11 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
         # the $ORIGIN-relative `-rpath` fixes multi-hop native shared
         # dependencies generally, without needing to know in advance whether
         # any given target's dependency graph actually has one.
-        link.add("-optl", cmd_args("-Wl,-rpath-link,", symlink_dir, delimiter = ""))
+        #
+        # (GNU ld only: Apple's ld doesn't resolve a dependency's own
+        # dependencies at link time.)
+        if is_gnu_linker:
+            link.add("-optl", cmd_args("-Wl,-rpath-link,", symlink_dir, delimiter = ""))
 
     ctx.actions.run(link, category = "haskell_link", env = haskell_toolchain.link_env)
 
