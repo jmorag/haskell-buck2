@@ -78,6 +78,7 @@ load("//buck2:cmm.bzl", "cmm_library")
 load("//buck2:cxx.bzl", "cxx_binary", "cxx_library")
 load("//buck2:headers.bzl", "headers_of")
 load("//buck2:haskell.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//buck2:variant.bzl", "variant")
 load("//cabal-buck2:packages.bzl", "OVERRIDES", "PACKAGES")
 load("@prelude//paths.bzl", "paths")
 load("@prelude//third-party:pkgconfig.bzl", "external_pkgconfig_library")
@@ -289,6 +290,11 @@ def _cxx_kwargs(c, pkgconfig_seen, srcs):
 
     return kwargs
 
+_PROFILING_DEFINES = select({
+    "root//buck2/constraints:prof": ["-DPROFILING"],
+    "DEFAULT": [],
+})
+
 def _cxx_library(c, pkg_dir, pkgconfig_seen):
     # Returns the labels the Haskell rule must additionally depend on.
     srcs = list(c.get("c_sources", [])) + list(c.get("cxx_sources", [])) + list(c.get("asm_sources", []))
@@ -300,8 +306,9 @@ def _cxx_library(c, pkg_dir, pkgconfig_seen):
     # The C of a Haskell component is compiled as GHC would compile it,
     # which includes its version header (defining __GLASGOW_HASKELL__) and
     # makes available its own headers (HsFFI.h) and those of the packages
-    # the component depends on (HsUnixConfig.h, say).
-    kwargs["compiler_flags"] = ["-include", "ghcversion.h"]
+    # the component depends on (HsUnixConfig.h, say), and defines PROFILING
+    # when it is profiled.
+    kwargs["compiler_flags"] = ["-include", "ghcversion.h"] + _PROFILING_DEFINES
     packages, labels = _classify_deps(c.get("deps", []))
     headers = name + "-headers"
     headers_of(name = headers, deps = _nub([_third_party_label(p) for p in ["rts"] + packages] + labels))
@@ -381,6 +388,12 @@ def _cmm_library(c, spec):
     )
     return [":" + name]
 
+def _profiled(label):
+    # `label` (a target of this package) built for profiling.
+    name = label.removeprefix(":") + "-prof"
+    variant(name = name, actual = label, transition = "root//buck2/constraints:to-prof", visibility = ["PUBLIC"])
+    return ":" + name
+
 def _haskell_kwargs(c, spec, helpers):
     # `helpers` are the rules of the component's C/C++/Cmm code.
     pkg_dir = _this_dir(spec)
@@ -415,9 +428,12 @@ def _haskell_kwargs(c, spec, helpers):
         unit_id = _this_unit_id(compiler_flags)
         if unit_id:
             kwargs["unit_id"] = unit_id
-        # The code of the helpers is part of the library, as in Cabal.
+        # The code of the helpers is part of the library, as in Cabal, which
+        # compiles it for each way: for the profiled library, as built for
+        # profiling.
         if helpers:
             kwargs["internal_deps"] = helpers
+            kwargs["prof_internal_deps"] = [_profiled(h) for h in helpers]
         kwargs["exposed"] = c.get("exposed", True)
         if c.get("hidden_modules"):
             kwargs["hidden_modules"] = list(c["hidden_modules"])
