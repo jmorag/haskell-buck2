@@ -784,30 +784,23 @@ def _build_haskell_lib(
     # this package's own conf is what *other* packages doing Template
     # Haskell will actually load).
     own_shared_lib = None
-    if non_profiling_shared_lib != None and link_style == LinkStyle("static"):
-        # Only fires for the canonical "static" link style, mirroring
-        # `build_shared_too`'s own `link_style == LinkStyle("static")`
-        # guard above - `haskell_library_impl`'s own loop calls this
-        # function once per (link_style, enable_profiling) pair, and
-        # "static"/"static_pic" would otherwise both try to declare the
-        # exact same alias path below (confirmed directly: "Multiple
-        # artifacts ... declared at the same output location"). One
-        # alias is enough for both dbs to reference, same as `lib-shared`
-        # itself is already shared between them.
-        #
+    if non_profiling_shared_lib != None and link_style != LinkStyle("shared"):
         # `_make_package` derives the *profiled* registration's "extra-
-        # libraries:" name by appending "_p" to this same `libname` - so
-        # GHC, when dlopen-ing this package's dynamic way for a TH
-        # splice, looks for "lib<libname>_p<suffix>", not the plain
-        # "lib<libname><suffix>" this target actually built (confirmed
-        # directly: without this alias, GHC's own missing-file warning
-        # names exactly that "_p"-suffixed filename). A profiled *shared*
-        # library can never exist (GHC doesn't support `-prof` + shared),
-        # so there's no real content difference to alias around - this
-        # symlink just gives the one real, non-profiled `.so` the second
-        # name GHC will actually go looking for.
+        # libraries:" name by appending "_p" to this link style's `libstem`
+        # (e.g. "root_th_pic_p" for "static_pic") - so GHC, when dlopen-ing
+        # this package's dynamic way for a TH splice, looks for
+        # "lib<libstem>_p<suffix>", not the plain "lib<libname><suffix>"
+        # this target actually built (confirmed directly: without this
+        # alias, GHC's own missing-file warning names exactly that
+        # "_p"-suffixed filename). A profiled *shared* library can never
+        # exist (GHC doesn't support `-prof` + shared), so there's no real
+        # content difference to alias around - this symlink just gives the
+        # one real, non-profiled `.so` the name GHC will actually go
+        # looking for. Named after `libstem`, each of "static" and
+        # "static_pic" gets an alias of its own: "static_pic" is the one
+        # used on macOS, where code is always position-independent.
         own_shared_lib = ctx.actions.declare_output(
-            paths.join("lib-shared", "lib" + libname + "_p" + dynamic_lib_suffix),
+            paths.join("lib-shared", "lib" + libstem + "_p" + dynamic_lib_suffix),
             has_content_based_path = False,
         )
         ctx.actions.symlink_file(own_shared_lib.as_output(), non_profiling_shared_lib)
@@ -1263,6 +1256,15 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
     if enable_profiling:
         link.add("-prof")
 
+    # Without this, GHC links its static RTS into a binary whose
+    # Haskell libraries are shared, and the linker discards whatever
+    # parts of it the binary itself doesn't use - but the shared
+    # libraries need them too, since they aren't linked against an RTS
+    # themselfs (which RTS - threaded or not - is only decided here).
+    # With it, GHC links the correct shared RTS instead.
+    if link_style == LinkStyle("shared"):
+        link.add("-dynamic")
+
     link_args = cmd_args("-package-env=-")
 
     osuf, _hisuf = output_extensions(link_style, enable_profiling)
@@ -1476,8 +1478,10 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
             out = sos_dir,
             shared_libs = sos,
         )
-        rpath_ref = get_rpath_origin(get_cxx_toolchain_info(ctx).linker_info.type)
+        linker_type = get_cxx_toolchain_info(ctx).linker_info.type
+        rpath_ref = get_rpath_origin(linker_type)
         rpath_ldflag = "-Wl,{}/{}".format(rpath_ref, sos_dir)
+        is_gnu_linker = linker_type == LinkerType("gnu")
 
         # `--disable-new-dtags`: without it, GNU ld's default emits the
         # modern DT_RUNPATH tag for `-rpath`, which the dynamic loader only
@@ -1500,7 +1504,9 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
         # resolution, not just the object that carries it - exactly what a
         # dependency chain of arbitrary depth needs, without requiring every
         # library along the way to separately carry its own rpath.
-        link.add("-optl", "-Wl,--disable-new-dtags")
+        # (GNU ld only: Mach-O has no such distinction.)
+        if is_gnu_linker:
+            link.add("-optl", "-Wl,--disable-new-dtags")
         link.add("-optl", "-Wl,-rpath", "-optl", rpath_ldflag)
 
         # `-rpath` (above) only takes effect once the *finished binary* runs
@@ -1526,7 +1532,11 @@ def haskell_binary_impl(ctx: AnalysisContext) -> list[Provider]:
         # the $ORIGIN-relative `-rpath` fixes multi-hop native shared
         # dependencies generally, without needing to know in advance whether
         # any given target's dependency graph actually has one.
-        link.add("-optl", cmd_args("-Wl,-rpath-link,", symlink_dir, delimiter = ""))
+        #
+        # (GNU ld only: Apple's ld doesn't resolve a dependency's own
+        # dependencies at link time.)
+        if is_gnu_linker:
+            link.add("-optl", cmd_args("-Wl,-rpath-link,", symlink_dir, delimiter = ""))
 
     ctx.actions.run(link, category = "haskell_link", env = haskell_toolchain.link_env)
 
