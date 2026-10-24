@@ -188,6 +188,29 @@ def _this_unit_id(flags):
             unit_id = flags[i + 1]
     return unit_id
 
+def _unit_id(spec, c, name):
+    """
+    The unit id of the library component `c` (named `name`) in the given
+    package spec.
+
+    The unit id is given by a `-this-unit-id` flag if there is one, or
+    otherwise the default Cabal unit id:
+        <package>-<version>-inplace[-<component>]
+    """
+    unit_id = _this_unit_id(list(c.get("ghc_options", [])) + list(spec.get("ghc_options", [])))
+    if unit_id:
+        return unit_id
+    package = spec["package"]
+    unit_id = package["name"] + ("-" + package["version"] if "version" in package else "") + "-inplace"
+    return unit_id if name == package["name"] else unit_id + "-" + name
+
+def cabal_unit_id(spec, name):
+    """
+    The unit id of the component `name` in the given package `spec`
+    """
+    c = [c for c in spec["components"] if c["kind"] == "library" and c["name"] == name][0]
+    return _unit_id(spec, c, name)
+
 def _lib_dir_flags(c, pkg_dir):
     # Where the linker looks for the component's extra_libraries: its
     # extra-lib-dirs, which Cabal has already extended with the directories
@@ -425,9 +448,7 @@ def _haskell_kwargs(c, spec, helpers):
         kwargs["package_name"] = spec["package"]["name"]
         if "version" in spec["package"]:
             kwargs["package_version"] = spec["package"]["version"]
-        unit_id = _this_unit_id(compiler_flags)
-        if unit_id:
-            kwargs["unit_id"] = unit_id
+        kwargs["unit_id"] = _unit_id(spec, c, c["name"])
         # The code of the helpers is part of the library, as in Cabal, which
         # compiles it for each way: for the profiled library, as built for
         # profiling.
