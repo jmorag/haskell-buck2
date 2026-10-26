@@ -697,6 +697,7 @@ def _build_haskell_lib(
         pkgname = pkgname,
         native_shared_libs_dir = native_shared_libs_dir,
         dynamic_too = dynamic_too,
+        dynamic_from = non_profiling_shared_compiled if enable_profiling else None,
     )
     solibs = {}
     artifact_suffix = get_artifact_suffix(link_style, enable_profiling)
